@@ -17,10 +17,10 @@ scanner = Scanner(0)
 endFlag = False
 
 #buffer for reassembly stuff: for handleNotification of data, store it and reassemble
-bufferQueue = []
-buffer = None
-bufferIsComplete = False
-isAcknowledged = False
+# bufferQueue = []
+# buffer = None
+# bufferIsComplete = False
+# isAcknowledged = False
 
 '''
 def pp(*arg):
@@ -34,61 +34,61 @@ def pp(*arg):
 class BufferHandler():
     def __init__(self, number):
         self.number = str(number)
+        self.bufferQueue = []
+        self.buffer = None
+        self.bufferIsComplete = False
+        self.isAcknowledged = False
+
+    def is_ascii(self, s):
+        return all((ord(c) < 128 and ord(c) > 47) for c in s)
+
+    def compress(self, num):
+        if num < 10:
+            return num
+        return num%10 ^ self.compress(num//10)
         
+    def xor(self, st):
+        output = 0
+        for i in range(len(st)):
+            output ^= ord(st[i])
+        return self.compress(output)
 
-def is_ascii(s):
-    return all((ord(c) < 128 and ord(c) > 47) for c in s)
-
-def compress(num):
-    if num < 10:
-        return num
-    return num%10 ^ compress(num//10)
-    
-def xor(st):
-    output = 0
-    for i in range(len(st)):
-        output ^= ord(st[i])
-    return compress(output)
-
-def checkValidity(data):
-    global isAcknowledged
-    if not is_ascii(data):
+    def checkValidity(self, data):
+        #global isAcknowledged
+        if not self.is_ascii(data):
+            return False
+        elif len(data) == 1 and data[0] == 'A':
+            self.isAcknowledged = True
+            return True
+        elif len(data) == 20 and data[19] == str(self.xor(data[:19])):
+            # print(data[19], 'vs',str(xor(data[19])))
+            return True
         return False
-    elif len(data) == 1 and data[0] == 'A':
-        isAcknowledged = True
-        return True
-    elif len(data) == 20 and data[19] == str(xor(data[:19])):
-        # print(data[19], 'vs',str(xor(data[19])))
-        return True
-    return False
 
-def isCompleteBuffer(data):
-    global buffer
-    global bufferQueue
-    global bufferIsComplete
-    if checkValidity(data): #accepts 'A' and approved checksum packets(with len 20)
-        return True
-    if isAcknowledged: #if check fails, do buffering
-        output = list(filter(None, re.split(r'[\x00-\x20]', data))) #filter out nonsense bytes
-        if len(output) > 0:
-            assembledString = ''
-            if len(bufferQueue) == 0:
-                for elem in output:
-                    assembledString += '!'
-                    bufferQueue.append(elem)
-                    assembledString += elem
-            else:
-                if len(output) == 1: #1 element in output
-                    assembledString = bufferQueue.pop(0) + output[0]
-                else: #else 2 elements in output
-                    bufferQueue.append(output[1])
-                    assembledString = bufferQueue.pop(0) + output[0]
-            # print('regex:', assembledString, bufferQueue)
-            if checkValidity(assembledString):
-                buffer = assembledString
-                # print('WHEW', buffer)
-                return True
-    return False
+    def isCompleteBuffer(self, data):
+        if self.checkValidity(data): #accepts 'A' and approved checksum packets(with len 20)
+            return True
+        if self.isAcknowledged: #if check fails, do buffering
+            output = list(filter(None, re.split(r'[\x00-\x20]', data))) #filter out nonsense bytes
+            if len(output) > 0:
+                assembledString = ''
+                if len(self.bufferQueue) == 0:
+                    for elem in output:
+                        assembledString += '!'
+                        self.bufferQueue.append(elem)
+                        assembledString += elem
+                else:
+                    if len(output) == 1: #1 element in output
+                        assembledString = self.bufferQueue.pop(0) + output[0]
+                    else: #else 2 elements in output
+                        self.bufferQueue.append(output[1])
+                        assembledString = self.bufferQueue.pop(0) + output[0]
+                # print('regex:', assembledString, self.bufferQueue)
+                if self.checkValidity(assembledString):
+                    self.buffer = assembledString
+                    # print('WHEW', self.bH.buffer)
+                    return True
+        return False
 
 class NotificationDelegate(DefaultDelegate):
     def __init__(self, number):
@@ -96,35 +96,35 @@ class NotificationDelegate(DefaultDelegate):
         self.number = str(number)
         self.pastTime = time()
         self.msgCount = self.goodPacketCount = self.goodPacketsArm = self.goodPacketsBody = 0
-        self.bufferHandler = BufferHandler(number)
+        self.bH = BufferHandler(number)
 
     def handleNotification(self, cHandle, data):
-        global buffer
+        #global buffer
         self.msgCount += 1
         data = data.decode("utf-8")
         # print(f'{self.number} D:', data)
-        flag = checkValidity(data)
-        if isCompleteBuffer(data):
+        flag = self.bH.checkValidity(data)
+        if self.bH.isCompleteBuffer(data):
             self.goodPacketCount += 1
             if data[0] == '0':
                 self.goodPacketsArm += 1
             elif data[0] == '1':
                 self.goodPacketsBody += 1
-            if buffer:
-                if data[0] != '0' and buffer[0] == '0':
+            if self.bH.buffer:
+                if data[0] != '0' and self.bH.buffer[0] == '0':
                     if data[0] == '1':
                         self.goodPacketsBody -= 1
                     self.goodPacketsArm += 1
-                elif data[0] != '1' and buffer[0] == '1':
+                elif data[0] != '1' and self.bH.buffer[0] == '1':
                     if data[0] == '0':
                         self.goodPacketsArm -= 1
                     self.goodPacketsBody += 1
-                data = buffer
+                data = self.bH.buffer
                 flag = 'Assembled!'
                 # print(buffer)
                 # with open("laptopdata.txt", "a") as text_file:
                     # print(f"!{flag}: {data} | {self.msgCount}", file=text_file)
-                buffer = None
+                self.bH.buffer = None
             # print(f"{flag}: {data} | {self.msgCount} |{self.goodPacketCount}|{self.goodPacketsArm}|{self.goodPacketsBody}")
             with open(f"laptopdata{self.number}.txt", "a") as text_file:
                 '''
@@ -137,7 +137,7 @@ class NotificationDelegate(DefaultDelegate):
                     # print(f"{flag}: {data} | {self.msgCount}", file=text_file)
         if time() - self.pastTime >= 5:
             tt = time() - self.pastTime
-            print(f"--- {tt}s have passed ---")
+            print(f"---{self.number}: {tt}s have passed ---")
             with open(f"laptopdata{self.number}.txt", "a") as text_file:
                 print('\n***--- 5s have passed ---***\n', file=text_file)
             self.pastTime = time()
