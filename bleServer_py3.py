@@ -1,24 +1,28 @@
 from bluepy.btle import Scanner, DefaultDelegate, Peripheral, BTLEDisconnectError
 from time import sleep, time
 from collections import deque
+from random import uniform
 import sys
 import threading
 import re
 
-bt_addrs = ["34:15:13:22:a9:be", "2c:ab:33:cc:68:fa", "34:15:13:22:96:6f"]
-connections = [] #stores peripherals
-connection_threads = [] #stores threads linked to peripherals (useless atm...)
+#ble stuff
+bt_addrs = {"34:15:13:22:a9:be":0, "2c:ab:33:cc:68:fa":1, "34:15:13:22:96:6f":2}
+connections = {} #stores peripherals
+connection_threads = {} #stores threads linked to peripherals (useless atm...)
 BLE_SERVICE_UUID = "0000dfb0-0000-1000-8000-00805f9b34fb"
 BLE_CHARACTERISTIC_UUID = "0000dfb1-0000-1000-8000-00805f9b34fb"
-endFlag = False
 scanner = Scanner(0)
-printlock = threading.Lock()
-#to for handleNotification of data, store it and reassemble
+#printlock = threading.Lock()
+endFlag = False
+
+#buffer for reassembly stuff: for handleNotification of data, store it and reassemble
 bufferQueue = []
 buffer = None
 bufferIsComplete = False
 isAcknowledged = False
 
+'''
 def pp(*arg):
     with printlock:
         for i in arg:
@@ -26,6 +30,11 @@ def pp(*arg):
             if i != len(arg)-1:
                 print(' ', end='')
         print('')
+'''
+class BufferHandler():
+    def __init__(self, number):
+        self.number = str(number)
+        
 
 def is_ascii(s):
     return all((ord(c) < 128 and ord(c) > 47) for c in s)
@@ -84,12 +93,10 @@ def isCompleteBuffer(data):
 class NotificationDelegate(DefaultDelegate):
     def __init__(self, number):
         DefaultDelegate.__init__(self)
-        self.number = number
-        self.msgCount = 0
+        self.number = str(number)
         self.pastTime = time()
-        self.goodPacketCount = 0
-        self.goodPacketsArm = 0
-        self.goodPacketsBody = 0
+        self.msgCount = self.goodPacketCount = self.goodPacketsArm = self.goodPacketsBody = 0
+        self.bufferHandler = BufferHandler(number)
 
     def handleNotification(self, cHandle, data):
         global buffer
@@ -119,27 +126,28 @@ class NotificationDelegate(DefaultDelegate):
                     # print(f"!{flag}: {data} | {self.msgCount}", file=text_file)
                 buffer = None
             # print(f"{flag}: {data} | {self.msgCount} |{self.goodPacketCount}|{self.goodPacketsArm}|{self.goodPacketsBody}")
-            with open("laptopdata.txt", "a") as text_file:
-                print(f"{flag}: {data} | {self.msgCount} |{self.goodPacketCount}|{self.goodPacketsArm}|{self.goodPacketsBody}", file=text_file)
+            with open(f"laptopdata{self.number}.txt", "a") as text_file:
+                '''
+                # Device:number,flag:data |total|goodPacketCount|goodPacketsArm|goodPacketsBody
+                '''
+                print(f"{self.number},{flag}: {data} |{self.msgCount}|{self.goodPacketCount}|{self.goodPacketsArm}|{self.goodPacketsBody}", file=text_file)
         # else:
             # # print(str(self.number), 'Err:', data, '---', self.msgCount)
             # with open("laptopdata.txt", "a") as text_file:
                     # print(f"{flag}: {data} | {self.msgCount}", file=text_file)
         if time() - self.pastTime >= 5:
-            print('--- 5s have passed ---')
-            with open("laptopdata.txt", "a") as text_file:
-                print('--- 5s have passed ---', file=text_file)
+            tt = time() - self.pastTime
+            print(f"--- {tt}s have passed ---")
+            with open(f"laptopdata{self.number}.txt", "a") as text_file:
+                print('\n***--- 5s have passed ---***\n', file=text_file)
             self.pastTime = time()
-            self.goodPacketCount = 0
-            self.msgCount = 0
-            self.goodPacketsArm = 0
-            self.goodPacketsBody = 0
+            self.msgCount = self.goodPacketCount = self.goodPacketsArm = self.goodPacketsBody = 0
 
 class ConnectionHandlerThread (threading.Thread):
     def __init__(self, connection_index):
         threading.Thread.__init__(self)
         self.connection_index = connection_index
-        self.delay = self.connection_index + 1.1 #Random delay
+        self.delay = 1 + uniform(0.1, 0.5) #Random delay
         self.isConnected = True
         self.addr = ''
 
@@ -176,8 +184,7 @@ class ConnectionHandlerThread (threading.Thread):
         self.c = self.s.getCharacteristics()[0]
         
         #Delay before HANDSHAKE
-        print('start', self.connection_index, self.c.uuid)
-        print('Sleeping for 2s')
+        print('Start', self.connection_index, self.c.uuid)
         sleep(self.delay)
         print('Done sleep')
         self.c.write(("H").encode())
@@ -210,14 +217,16 @@ def run():
     for d in devices:
         if d.addr in bt_addrs:
             addr = d.addr
+            idx = bt_addrs[addr]
             print(addr, 'found!')
             try:
                 p = Peripheral(addr)
-                connections.append(p)
-                t = ConnectionHandlerThread(len(connections)-1)
+                #connections.append(p)
+                connections[idx] = p
+                t = ConnectionHandlerThread(idx)
                 t.daemon = True #set to true so that can CTRL-C easily
                 t.start()
-                connection_threads.append(t)
+                connection_threads[idx] = t
             except Exception: #Raised when unable to create connection
                 print('Error in connecting device')
 
