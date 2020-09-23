@@ -8,6 +8,7 @@ import re
 
 #ble stuff
 bt_addrs = {"34:15:13:22:a9:be":0, "2c:ab:33:cc:68:fa":1, "34:15:13:22:96:6f":2}
+bt_addrs_isConnected = {"34:15:13:22:a9:be":False, "2c:ab:33:cc:68:fa":False, "34:15:13:22:96:6f":False}
 connections = {} #stores peripherals
 connection_threads = {} #stores threads linked to peripherals (useless atm...)
 BLE_SERVICE_UUID = "0000dfb0-0000-1000-8000-00805f9b34fb"
@@ -61,32 +62,39 @@ class BufferHandler():
             self.isAcknowledged = True
             return True
         elif len(data) == 20 and data[19] == str(self.xor(data[:19])):
-            # print(data[19], 'vs',str(xor(data[19])))
             return True
         return False
 
-    def isCompleteBuffer(self, data):
+    def isCompleteBuffer(self, data, msgCount):
         if self.checkValidity(data): #accepts 'A' and approved checksum packets(with len 20)
             return True
         if self.isAcknowledged: #if check fails, do buffering
             output = list(filter(None, re.split(r'[\x00-\x20]', data))) #filter out nonsense bytes
             if len(output) > 0:
                 assembledString = ''
+                debugFlag = ''
                 if len(self.bufferQueue) == 0:
                     for elem in output:
-                        assembledString += '!'
+                        debugFlag = '!'
                         self.bufferQueue.append(elem)
                         assembledString += elem
                 else:
                     if len(output) == 1: #1 element in output
+                        debugFlag = '@'
                         assembledString = self.bufferQueue.pop(0) + output[0]
+                        debugFlag += output[0]
+                        debugFlag += '@'
                     else: #else 2 elements in output
+                        debugFlag = '#'
                         self.bufferQueue.append(output[1])
                         assembledString = self.bufferQueue.pop(0) + output[0]
-                # print('regex:', assembledString, self.bufferQueue)
+                        debugFlag += output[0]
+                        debugFlag += '#'
+                # For debugging error packets
+                # with open(f"laptopdata{self.number}.txt", "a") as text_file:
+                    # print(f"F,{debugFlag}{assembledString},{self.bufferQueue}:|{msgCount}", file=text_file)
                 if self.checkValidity(assembledString):
                     self.buffer = assembledString
-                    # print('WHEW', self.bH.buffer)
                     return True
         return False
 
@@ -94,17 +102,16 @@ class NotificationDelegate(DefaultDelegate):
     def __init__(self, number):
         DefaultDelegate.__init__(self)
         self.number = str(number)
-        self.pastTime = time()
+        self.baseTime = self.pastTime = time()
         self.msgCount = self.goodPacketCount = self.goodPacketsArm = self.goodPacketsBody = 0
         self.bH = BufferHandler(number)
 
     def handleNotification(self, cHandle, data):
-        #global buffer
         self.msgCount += 1
         data = data.decode("utf-8")
         # print(f'{self.number} D:', data)
         flag = self.bH.checkValidity(data)
-        if self.bH.isCompleteBuffer(data):
+        if self.bH.isCompleteBuffer(data, self.msgCount):
             self.goodPacketCount += 1
             if data[0] == '0':
                 self.goodPacketsArm += 1
@@ -120,26 +127,23 @@ class NotificationDelegate(DefaultDelegate):
                         self.goodPacketsArm -= 1
                     self.goodPacketsBody += 1
                 data = self.bH.buffer
-                flag = 'Assembled!'
-                # print(buffer)
-                # with open("laptopdata.txt", "a") as text_file:
-                    # print(f"!{flag}: {data} | {self.msgCount}", file=text_file)
+                flag = 'AS'
                 self.bH.buffer = None
-            # print(f"{flag}: {data} | {self.msgCount} |{self.goodPacketCount}|{self.goodPacketsArm}|{self.goodPacketsBody}")
-            with open(f"laptopdata{self.number}.txt", "a") as text_file:
-                '''
+            '''
                 # Device:number,flag:data |total|goodPacketCount|goodPacketsArm|goodPacketsBody
-                '''
-                print(f"{self.number},{flag}: {data} |{self.msgCount}|{self.goodPacketCount}|{self.goodPacketsArm}|{self.goodPacketsBody}", file=text_file)
-        # else:
-            # # print(str(self.number), 'Err:', data, '---', self.msgCount)
-            # with open("laptopdata.txt", "a") as text_file:
-                    # print(f"{flag}: {data} | {self.msgCount}", file=text_file)
+                # Prints individual report
+            '''
+            # with open(f"laptopdata{self.number}.txt", "a") as text_file:
+                # print(f"{self.number},{flag}: {data} |{self.msgCount}|{self.goodPacketCount}|{self.goodPacketsArm}|{self.goodPacketsBody}", file=text_file)
+        
+        # Prints every 5s for debugging
         if time() - self.pastTime >= 5:
-            tt = time() - self.pastTime
+            tt = time() - self.baseTime
             print(f"---{self.number}: {tt}s have passed ---")
             with open(f"laptopdata{self.number}.txt", "a") as text_file:
-                print('\n***--- 5s have passed ---***\n', file=text_file)
+                # Prints overall report
+                print(f"{self.number} |{self.msgCount}|{self.goodPacketCount}|{self.goodPacketsArm}|{self.goodPacketsBody}", file=text_file)
+                print(f"\n*** {tt}s have passed ***\n", file=text_file)
             self.pastTime = time()
             self.msgCount = self.goodPacketCount = self.goodPacketsArm = self.goodPacketsBody = 0
 
@@ -147,7 +151,7 @@ class ConnectionHandlerThread (threading.Thread):
     def __init__(self, connection_index):
         threading.Thread.__init__(self)
         self.connection_index = connection_index
-        self.delay = 1 + uniform(0.1, 0.5) #Random delay
+        self.delay = uniform(0.1, 0.5) #Random delay
         self.isConnected = True
         self.addr = ''
 
@@ -155,25 +159,31 @@ class ConnectionHandlerThread (threading.Thread):
         while True: #Loop here until reconnected (Thread is doing nothing anyways...)
             try:
                 print("reconnecting to ", addr)
-                #beetle.connect(beetle.addr)
-                p = Peripheral(addr)
                 
-                #overhead code
-                self.connection = p
-                self.connection.withDelegate(NotificationDelegate(self.connection_index))
-                self.s = self.connection.getServiceByUUID(BLE_SERVICE_UUID)
-                self.c = self.s.getCharacteristics()[0]
+                devices = scanner.scan(1)
+                for d in devices:
+                    if d.addr in bt_addrs:
+                        if bt_addrs_isConnected[d.addr]:
+                            continue
                 
-                connections[self.connection_index] = self.connection
-                
-                print("reconnect-ed to ", addr)
-                self.c.write(("H").encode())
-                
-                self.isConnected = True
-                return True
+                        p = Peripheral(addr)
+                        
+                        #overhead code
+                        self.connection = p
+                        self.connection.withDelegate(NotificationDelegate(self.connection_index))
+                        self.s = self.connection.getServiceByUUID(BLE_SERVICE_UUID)
+                        self.c = self.s.getCharacteristics()[0]
+                        
+                        connections[self.connection_index] = self.connection
+                        
+                        print("reconnect-ed to ", addr)
+                        self.c.write(("H").encode())
+                        
+                        self.isConnected = True
+                        return True
             except:
                 print("Error when reconnecting..")
-            sleep(self.delay)
+            sleep(uniform(0.5, 0.9))
             
     def run(self):
         #Setup respective delegates, service, characteristic...
@@ -202,6 +212,7 @@ class ConnectionHandlerThread (threading.Thread):
                         continue
                     print("Device ", self.connection_index, " disconnected!")
                     self.isConnected = False
+                    bt_addrs_isConnected[self.addr] = False
                     self.connection.disconnect()
             #Whenever state of BLE device is disconnected, run this...
             if not self.isConnected:
@@ -210,14 +221,16 @@ class ConnectionHandlerThread (threading.Thread):
                     print('Successfully reconnected!')
                 sleep(self.delay)
 
-
 ## Try connecting to BLEs
 def run():
-    devices = scanner.scan(2)
+    devices = scanner.scan(3)
     for d in devices:
         if d.addr in bt_addrs:
+            if bt_addrs_isConnected[d.addr]:
+                continue
             addr = d.addr
             idx = bt_addrs[addr]
+            bt_addrs_isConnected[addr] = True
             print(addr, 'found!')
             try:
                 p = Peripheral(addr)
@@ -227,16 +240,15 @@ def run():
                 t.daemon = True #set to true so that can CTRL-C easily
                 t.start()
                 connection_threads[idx] = t
-            except Exception: #Raised when unable to create connection
+            except: #Raised when unable to create connection
                 print('Error in connecting device')
 
-
-run()
-print('End of initial scan')
-    
 try:
+    run()
+    print('End of initial scan')
+    
+    #IMPT WHILE LOOP FOR KEEPING THREADS ALIVE!!!
     while True:
-        #run()
         pass
 except KeyboardInterrupt:
     print('END OF PROGRAM. Disconnecting all devices..')

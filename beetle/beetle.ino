@@ -3,7 +3,7 @@
 unsigned long previous_time = 0;
 unsigned long previous_timeA = 0;
 unsigned long previous_timeB = 0;
-unsigned long actual_time = 0;
+//unsigned long actual_time = 0;
 long count = 0;
 volatile bool handshake_flag = false;
 char buff[20];
@@ -65,7 +65,7 @@ void checkHandshake() {
       buff[0] = 'A';
       Serial.print(buff);
       handshake_flag = true;
-      delay(100);
+      delay(50);
     }
   }
 
@@ -75,7 +75,7 @@ void checkHandshake() {
 //Task to send 1st array of values (from arm sensor) ~15-20Hz
 void sendArmData() {
   //Send arm sensor
-  if (handshake_flag && (actual_time - previous_timeA >= 5) ) {
+  if (handshake_flag && (millis() - previous_timeA >= 50UL) ) {
     for (int i = 0; i < 1; i++) {
       buff[0] = 48 + i;
       char temp[3];
@@ -95,16 +95,16 @@ void sendArmData() {
 //      }
       Serial.print(buff);
       memset(buff, 0, 20);
-      delay(40);
+//      delay(25);
     }
-    previous_timeA = actual_time;
+    previous_timeA = millis();
   }
 }
 
 //Task to send 2nd array of values (from body sensor) ~4-5Hz
 void sendBodyData() {
     //Send body sensor
-  if (handshake_flag && (actual_time - previous_timeB >= 170) ) {
+  if (handshake_flag && (millis() - previous_timeB >= 200UL) ) {
 //    char buff[20] = {0};
     memset(buff, 0, 20);
 
@@ -122,14 +122,14 @@ void sendBodyData() {
       buff[19] = c[0];
       Serial.print(buff);
       memset(buff, 0, 20);
-      delay(25);
+//      delay(25);
     }
-    previous_timeB = actual_time;
+    previous_timeB = millis();
   }
 }
 
 void loop() {
-  actual_time = millis();
+//  actual_time = millis();
   checkHandshake();
   sendArmData();
   sendBodyData();
