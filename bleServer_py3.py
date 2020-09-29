@@ -16,6 +16,9 @@ BLE_CHARACTERISTIC_UUID = "0000dfb1-0000-1000-8000-00805f9b34fb"
 scanner = Scanner(0)
 #printlock = threading.Lock()
 endFlag = False
+PACKET_SIZE = 19
+PACKET_ZERO_OFFSET = 13500
+BUFFER_SKIP = 'xxx111xxx111xxx111x'
 
 #buffer for reassembly stuff: for handleNotification of data, store it and reassemble
 # bufferQueue = []
@@ -37,9 +40,38 @@ class BufferHandler():
         self.number = str(number)
         self.bufferQueue = []
         self.buffer = None
-        self.bufferIsComplete = False
         self.isAcknowledged = False
-
+        self.hmap = {10:'a', 11:'b', 12:'c', 13:'d', 14:'e', 15:'f'}
+    
+    """
+    # data is in string format, 20bytes, base30, offset13500
+    # data[0] = deviceId
+    # data[1:19] = xyz,pitch,roll,yaw (3bytes each)
+    #data[19] = checksum -- ignore since we already validate beforehand
+    # returns output (str)
+    """
+    def convertToDecimal(self, data):
+        def base30ToDecimal(data):
+            decimal = 0
+            for i in range(len(data)):
+                decimal *= 30
+                decimal += (ord(data[i]) - 48) if data[i].isnumeric() else (ord(data[i]) - 97 + 10)
+            decimal -= PACKET_ZERO_OFFSET
+            return decimal
+        
+        if len(data) != PACKET_SIZE:
+            return data
+        
+        # output = data[0] #str
+        # output += '.'
+        output = ''
+        data = data[:PACKET_SIZE-1].lower() #str
+        # data = data[1:PACKET_SIZE-1].lower() #str
+        for i in range(0, PACKET_SIZE-2, 3):
+            output += str(base30ToDecimal(data[i:i+3])) + '.'
+        output = output[:-1]
+        return output
+        
     def is_ascii(self, s):
         return all((ord(c) < 128 and ord(c) > 47) for c in s)
 
@@ -47,52 +79,107 @@ class BufferHandler():
         if num < 10:
             return num
         return num%10 ^ self.compress(num//10)
-        
+    
     def xor(self, st):
         output = 0
         for i in range(len(st)):
             output ^= ord(st[i])
-        return self.compress(output)
-
+        out = self.compress(output)
+        return out
+    
+    def getChksum(self, c):
+        return ord(c.lower()) - 97
+    
     def checkValidity(self, data):
         #global isAcknowledged
         if not self.is_ascii(data):
             return False
-        elif len(data) == 1 and data[0] == 'A':
+        elif len(data) == 1 and data[0] == 'A': #check handshake
             self.isAcknowledged = True
             return True
-        elif len(data) == 20 and data[19] == str(self.xor(data[:19])):
+        elif len(data) == PACKET_SIZE and self.getChksum(data[PACKET_SIZE-1]) == self.xor(data[:PACKET_SIZE-1]): #check valid checksum (int vs int)
             return True
         return False
 
     def isCompleteBuffer(self, data, msgCount):
         if self.checkValidity(data): #accepts 'A' and approved checksum packets(with len 20)
+            self.bufferQueue = ''
+            self.buffer = None
             return True
         if self.isAcknowledged: #if check fails, do buffering
+            
+            if msgCount == 2:
+                if self.checkValidity(data[1:PACKET_SIZE+1]):
+                    self.buffer = data[1:PACKET_SIZE+1]
+                else:
+                    return False
+        
             output = list(filter(None, re.split(r'[\x00-\x20]', data))) #filter out nonsense bytes
             if len(output) > 0:
                 assembledString = ''
                 debugFlag = ''
+                
+                # CASE A (just right)
+                # If empty, expected that len(data) > PACKET_SIZE (20)
                 if len(self.bufferQueue) == 0:
-                    for elem in output:
-                        debugFlag = '!'
-                        self.bufferQueue.append(elem)
-                        assembledString += elem
+                    debugFlag = '!'
+                    if len(output[0]) == PACKET_SIZE+1: #valid(19) + overflow(1)
+                        self.bufferQueue += output[0][PACKET_SIZE]
+                        assembledString = output[0][:PACKET_SIZE]
+                    debugFlag += output[0]
+                    debugFlag += '!'
+                # If size>0, 
                 else:
-                    if len(output) == 1: #1 element in output
+                    # CASE B (perfect fit)
+                    # expected that len(data) = PACKET_SIZE-1 (18)
+                    # Match the single char from bufferQueue with new data
+                    if len(output[0]) + len(self.bufferQueue) == PACKET_SIZE:
                         debugFlag = '@'
-                        assembledString = self.bufferQueue.pop(0) + output[0]
+                        assembledString = self.bufferQueue + output[0]
+                        self.bufferQueue = ''
                         debugFlag += output[0]
                         debugFlag += '@'
-                    else: #else 2 elements in output
+                    # CASE C (leftover)
+                    # if handleNotification() called while processing this isCompleteBuffer()
+                    # Clear previous buffer, perform rest same as CASE A
+                    # Expected len(data) is 20
+                    elif len(output[0]) + len(self.bufferQueue) > PACKET_SIZE:
+                        if len(output[0]) + len(self.bufferQueue) > 2*PACKET_SIZE:
+                            print('WTFFFFF', 'EXCEEDED 40 BYTES!!!')
                         debugFlag = '#'
-                        self.bufferQueue.append(output[1])
-                        assembledString = self.bufferQueue.pop(0) + output[0]
+                        bytesLeft = PACKET_SIZE - len(self.bufferQueue)
+                        assembledString = self.bufferQueue + output[0][:bytesLeft]
+                        self.bufferQueue = output[0][bytesLeft:]
                         debugFlag += output[0]
                         debugFlag += '#'
+                    # CASE D (shortage)
+                    # len(output[0]) + len(self.bufferQueue) < PACKET_SIZE
+                    else: 
+                        debugFlag = '#'
+                        self.bufferQueue += output[0]
+                        assembledString = BUFFER_SKIP
+                        debugFlag += output[0]
+                        debugFlag += '#'
+                # if len(self.bufferQueue) == 0:
+                    # for elem in output:
+                        # debugFlag = '!'
+                        # self.bufferQueue.append(elem)
+                        # assembledString += elem
+                # else:
+                    # if len(output) == 1: #1 element in output
+                        # debugFlag = '@'
+                        # assembledString = self.bufferQueue.pop(0) + output[0]
+                        # debugFlag += output[0]
+                        # debugFlag += '@'
+                    # else: #else 2 elements in output
+                        # debugFlag = '#'
+                        # self.bufferQueue.append(output[1])
+                        # assembledString = self.bufferQueue.pop(0) + output[0]
+                        # debugFlag += output[0]
+                        # debugFlag += '#'
                 # For debugging error packets
                 # with open(f"laptopdata{self.number}.txt", "a") as text_file:
-                    # print(f"F,{debugFlag}{assembledString},{self.bufferQueue}:|{msgCount}", file=text_file)
+                    # print(f"F,{debugFlag}<{assembledString}>,[{self.bufferQueue}]:|{msgCount}", file=text_file)
                 if self.checkValidity(assembledString):
                     self.buffer = assembledString
                     return True
@@ -110,31 +197,30 @@ class NotificationDelegate(DefaultDelegate):
         self.msgCount += 1
         data = data.decode("utf-8")
         # print(f'{self.number} D:', data)
+        # with open(f"laptopdata{self.number}.txt", "a") as text_file:
+            # print(f"  {self.msgCount} D:{data}", file=text_file)
         flag = self.bH.checkValidity(data)
         if self.bH.isCompleteBuffer(data, self.msgCount):
             self.goodPacketCount += 1
-            if data[0] == '0':
-                self.goodPacketsArm += 1
-            elif data[0] == '1':
-                self.goodPacketsBody += 1
+            deviceId = None
             if self.bH.buffer:
-                if data[0] != '0' and self.bH.buffer[0] == '0':
-                    if data[0] == '1':
-                        self.goodPacketsBody -= 1
-                    self.goodPacketsArm += 1
-                elif data[0] != '1' and self.bH.buffer[0] == '1':
-                    if data[0] == '0':
-                        self.goodPacketsArm -= 1
-                    self.goodPacketsBody += 1
                 data = self.bH.buffer
-                flag = 'AS'
                 self.bH.buffer = None
+                flag = 'AS'
+            if flag and (self.msgCount > 1 or time() - self.baseTime > 5):
+                if data[PACKET_SIZE-1].islower():
+                    deviceId = 0
+                    self.goodPacketsArm += 1
+                else:
+                    deviceId = 1
+                    self.goodPacketsBody += 1
             '''
-                # Device:number,flag:data |total|goodPacketCount|goodPacketsArm|goodPacketsBody
                 # Prints individual report
+                # Device:number,flag,deviceID:data |total|goodPacketCount|goodPacketsArm|goodPacketsBody
             '''
+            data = self.bH.convertToDecimal(data)
             # with open(f"laptopdata{self.number}.txt", "a") as text_file:
-                # print(f"{self.number},{flag}: {data} |{self.msgCount}|{self.goodPacketCount}|{self.goodPacketsArm}|{self.goodPacketsBody}", file=text_file)
+                # print(f"{self.number},{flag},{deviceId}: {data} |{self.msgCount}|{self.goodPacketCount}|{self.goodPacketsArm}|{self.goodPacketsBody}", file=text_file)
         
         # Prints every 5s for debugging
         if time() - self.pastTime >= 5:
@@ -158,7 +244,7 @@ class ConnectionHandlerThread (threading.Thread):
     def reconnect(self, addr):
         while True: #Loop here until reconnected (Thread is doing nothing anyways...)
             try:
-                print("reconnecting to ", addr)
+                print("reconnecting to", addr)
                 
                 devices = scanner.scan(1)
                 for d in devices:
@@ -176,7 +262,7 @@ class ConnectionHandlerThread (threading.Thread):
                         
                         connections[self.connection_index] = self.connection
                         
-                        print("reconnect-ed to ", addr)
+                        print("Reconnected to ", addr, '!')
                         self.c.write(("H").encode())
                         
                         self.isConnected = True
