@@ -2,17 +2,14 @@
 #define BASE_ITOA 30
 #define ZERO_OFFSET 13500
 
-unsigned long previous_time = 0;
 unsigned long previous_timeA = 0;
 unsigned long previous_timeB = 0;
-//unsigned long actual_time = 0;
 long count = 0;
 volatile bool handshake_flag = false;
 char buff[20];
 
 //Dummy values to send
-//Actual values range from 0-4095
-//int arr[6] = {0,1,12,123,1234,4021};
+//Actual values range [-13500, 13499]
 int arr[6] = {0, 19, 20, -123, -13500, 13499};
 
 //compress + computeChecksum gives a 1-byte checksum
@@ -63,6 +60,8 @@ void setPad(char *b, char *s) {
 void setup() {
   Serial.begin(115200);  //initial the Serial
   randomSeed(analogRead(0));
+  previous_timeA = millis();
+  previous_timeB = millis();
 }
 
 //Task to check handshake with laptop
@@ -77,78 +76,23 @@ void checkHandshake() {
   }  
 }
 
-////Task to send 1st array of values (from arm sensor) ~15-20Hz
-//void sendArmData() {
-//  //Send arm sensor
-//  if (handshake_flag && (millis() - previous_timeA >= 47UL) ) {
-//    for (int i = 0; i < 1; i++) {
-//      buff[0] = 48 + i;
-//      char temp[3];
-//      
-//      for (int j = 0; j < 6; j++) {
-//        itoa(getOffset(arr[j]), temp, BASE_ITOA);
-//        setPad(buff, temp); //copies temp onto buff with pads
-//      }
-//      
-//      char c[1];
-//      itoa(computeChecksum(buff), c, BASE_ITOA);
-//      buff[19] = c[0];
-//      Serial.print(buff);
-//      memset(buff, 0, 20);
-////      delay(25);
-//    }
-//    previous_timeA = millis();
-//    
-//    //simulate changing values
-//    arr[0] = (arr[0] + 1)%10;
-//  }
-//}
-//
-////Task to send 2nd array of values (from body sensor) ~4-5Hz
-//void sendBodyData() {
-//    //Send body sensor
-//  if (handshake_flag && (millis() - previous_timeB >= 197UL) ) {
-//    for (int i = 1; i < 2; i++) {
-//      buff[0] = 48 + i;
-//      char temp[3];
-//      
-//      for (int j = 0; j < 6; j++) {
-//        itoa(getOffset(arr[j]), temp, BASE_ITOA);
-//        setPad(buff, temp); //copies temp onto buff with pads
-//      }
-//      
-//      char c[1];
-//      itoa(computeChecksum(buff), c, BASE_ITOA);
-//      buff[19] = c[0];
-//      Serial.print(buff);
-//      memset(buff, 0, 20);
-////      delay(25);
-//    }
-//    previous_timeB = millis();
-//  }
-//}
-
 //Task to send 1st array of values (from arm sensor) ~15-20Hz
 void sendArmData() {
   //Send arm sensor
-  if (handshake_flag && (millis() - previous_timeA >= 35UL) ) {
+  if (handshake_flag && (millis() - previous_timeA >= 30UL) ) {
     int i = 0;
     char temp[4];
-    
     for (int j = 0; j < 6; j++) {
       itoa(getOffset(arr[j]), temp, BASE_ITOA);
       setPad(buff, temp); //copies temp onto buff with pads
     }
-    
-    char c[1];
     int checksumDecimal = computeChecksum(buff);
-//      itoa(computeChecksum(buff), c, BASE_ITOA);
-    c[0] = checksumDecimal + 'a'; //checksum from 'a' to 'p' for i==0
-    buff[18] = c[0];
+    //checksum from 'a' to 'p' for i==0
+    buff[18] = checksumDecimal + 'a';
     
     Serial.print(buff);
     memset(buff, 0, 20);
-    delay(15);
+    delay(23);
     previous_timeA = millis();
     
     //simulate changing values
@@ -159,30 +103,25 @@ void sendArmData() {
 //Task to send 2nd array of values (from body sensor) ~4-5Hz
 void sendBodyData() {
     //Send body sensor
-  if (handshake_flag && (millis() - previous_timeB >= 180UL) ) {
+  if (handshake_flag && (millis() - previous_timeB >= 181UL) ) {
     int i = 1;
     char temp[4];
-    
     for (int j = 0; j < 6; j++) {
       itoa(getOffset(arr[j]), temp, BASE_ITOA);
       setPad(buff, temp); //copies temp onto buff with pads
     }
-    
-    char c[1];
     int checksumDecimal = computeChecksum(buff);
-//      itoa(computeChecksum(buff), c, BASE_ITOA);
-    c[0] = checksumDecimal + 'A'; //checksum from 'A' to 'P' for i==1
-    buff[18] = c[0];
+    //checksum from 'A' to 'P' for i==1
+    buff[18] = checksumDecimal + 'A';
     
     Serial.print(buff);
     memset(buff, 0, 20);
-    delay(25);
+    delay(13);
     previous_timeB = millis();
   }
 }
 
 void loop() {
-//  actual_time = millis();
   checkHandshake();
   sendArmData();
   sendBodyData();
