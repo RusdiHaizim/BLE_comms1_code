@@ -3,7 +3,6 @@ import threading
 import re
 import socket
 import random
-
 from Crypto import Random
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad
@@ -13,43 +12,57 @@ from time import sleep, time
 from collections import deque
 from random import uniform,randint
 
-
-#BLE stuff
-# bt_addrs = {"34:15:13:22:a9:be":0, "2c:ab:33:cc:68:fa":1, "34:15:13:22:96:6f":2 } #, "c8:df:84:fe:3f:f4":3
-# bt_addrs_isConnected = {"34:15:13:22:a9:be":False, "2c:ab:33:cc:68:fa":False, "34:15:13:22:96:6f":False} #, "c8:df:84:fe:3f:f4":False
-
-bt_addrs = {"34:15:13:22:a9:be":0, "2c:ab:33:cc:68:fa":1, "34:15:13:22:96:6f":2, "c8:df:84:fe:3f:f4":3} #
-bt_addrs_isConnected = {"34:15:13:22:a9:be":False, "2c:ab:33:cc:68:fa":False, "34:15:13:22:96:6f":False, "c8:df:84:fe:3f:f4":False} #
-connections = {} #Stores peripherals of each beetle
-connection_threads = {} #Stores threads linked to peripherals --useless atm
 BLE_SERVICE_UUID = "0000dfb0-0000-1000-8000-00805f9b34fb"
 BLE_CHARACTERISTIC_UUID = "0000dfb1-0000-1000-8000-00805f9b34fb"
-scanner = Scanner(0)
-endFlag = False
 PACKET_SIZE = 19
 PACKET_ZERO_OFFSET = 13500
 BUFFER_SKIP = 'xxx111xxx111xxx111x'
-delayWindow = []
-for i in range(4):
-    delayWindow.append(i*0.521)
-lock = threading.Lock()
 
+
+### <CONFIGURATION PARAMETERS
+
+#BEETLES' MAC ADDRESSES
+#Format: <MAC_IN_LOWERCASE>:<DEVICE_NUM>
+bt_addrs = {"34:15:13:22:a9:be":0,
+            "2c:ab:33:cc:68:fa":1, 
+            "34:15:13:22:96:6f":2, 
+            "c8:df:84:fe:3f:f4":3}
+            
 #Debugging
 printRawData = 0
 printError = 0
 printGoodData = 0
 printSummary = 1
+
+#Set to 1 send to socket!
 clientFlag = 1
 
-#Client
+### />
+
+#Sets all addresses to "not connected"
+bt_addrs_isConnected = {}
+for addr in bt_addrs:
+    bt_addrs_isConnected[addr] = False
+
+connections = {} #Stores peripherals of each beetle
+connection_threads = {} #Stores threads linked to peripherals --useless atm
+scanner = Scanner(0)
+endFlag = False #Signal threads to sepukku
+
+#Simulate CSMA/CD for connection/reconnections
+delayWindow = []
+for i in range(4):
+    delayWindow.append(i*0.521)
+
+#Client Code
 ip_addr = 'localhost'
 port_num = 8080
 secret_key = 'thisisunhackable'
 client = None
 
-# dummy data for test purposes. not even a good one at that
+#Function to format data to be sent to socket
 def construct_message(data=None):
-    # test data temporary format is '#[deviceID]|[x]|[y]|[z]|[y]|[p]|[r]|[timestamp]
+    #Data format is '#[deviceID]|[x]|[y]|[z]|[y]|[p]|[r]|[timestamp]
     msg = '#'
     if data is not None:
         for element in data:
@@ -61,9 +74,8 @@ def construct_message(data=None):
             msg = msg + str(element) + '|'
     return msg[:-1]
 
+#Function to send data to socket
 def convertAndSendData(dataString, deviceId):
-    pass
-    
     ls = []
     ls.append(int(deviceId))
     ls += list(map(int, dataString.split('.')))
@@ -329,7 +341,7 @@ class NotificationDelegate(DefaultDelegate):
                 self.msgCount = self.goodPacketCount = self.goodPacketsArm = self.goodPacketsBody = 0
         except:
             #Error decoding using UTF-8
-            print('Decode error')
+            print('Decoding error!')
 
 """
     Manage each connection with a beetle
@@ -346,28 +358,6 @@ class ConnectionHandlerThread (threading.Thread):
         #Loop here until reconnected (Thread is doing nothing anyways...)
         while True:
             try:
-                # print(f"{self.connection_index}: reconnecting to", addr)
-                
-                # devices = scanner.scan(2)
-                # for d in devices:
-                    # if d.addr in bt_addrs:
-                        # if bt_addrs_isConnected[d.addr]:
-                            # continue
-                
-                        # p = Peripheral(addr)
-                        # #Reset configurations of connection/peripheral (overhead code)
-                        # self.connection = p
-                        # self.connection.withDelegate(NotificationDelegate(self.connection_index))
-                        # self.s = self.connection.getServiceByUUID(BLE_SERVICE_UUID)
-                        # self.c = self.s.getCharacteristics()[0]
-                        
-                        # connections[self.connection_index] = self.connection
-                        
-                        # print("Reconnected to ", addr, '!')
-                        # self.c.write(("H").encode()) #Need to handshake with beetle again to start sending data
-                        # flag = True
-                        # self.isConnected = True
-                        # return True
                 p = Peripheral(addr)
                 #Reset configurations of connection/peripheral (overhead code)
                 self.connection = p
@@ -400,9 +390,6 @@ class ConnectionHandlerThread (threading.Thread):
         
         #Delay before Handshake (to avoid any malformed packets somehow)
         print('Start', self.connection_index, self.c.uuid)
-        # sleep(self.delay)
-        # sleep(delayWindow[randint(0, 3)])
-        # print('Done sleep')
         self.c.write(("H").encode())
         
         #Run thread loop forever
@@ -427,6 +414,7 @@ class ConnectionHandlerThread (threading.Thread):
                 print('Trying to reconnect', self.connection_index)
                 if self.reconnect(self.addr):
                     print('Successfully reconnected!')
+                    pass
                 sleep(self.delay)
 
 """
@@ -457,8 +445,10 @@ def run():
 """
 if __name__ == "__main__":
     try:
+        #Setup client socket
         if clientFlag:
             client = Client(ip_addr, port_num, secret_key)
+        #Run scan for initial connection
         run()
         print('End of initial scan')
         

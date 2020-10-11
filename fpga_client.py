@@ -30,7 +30,7 @@ class Client():
     def send_data(self, msg):
         # test_string = "#" + position + "|" + action + "|" + delay + "|"
         to_send = self.encrypt_message(msg)
-        print("to send:", to_send)
+        #print("to send:", to_send)
         self.sock.sendall(to_send)
 
     def stop(self):
@@ -75,15 +75,11 @@ def main():
 
     # testing client-server connection with 20 randomly generated packets
     while action != "logout":
-        print(f"data: #{count + 1}")
+        #print(f"data: #{count + 1}")
         message = construct_message()
         client.send_data(message)
-        time.sleep(0.05)
+        time.sleep(0.01)
         count += 1
-        if count == 20:
-            client.stop()
-            print("stop sending")
-            break
 
     '''
     # stress testing number of packets sent in 5s with at least 10ms delay

@@ -427,6 +427,8 @@ class ConnectionHandlerThread (threading.Thread):
                 print('Trying to reconnect', self.connection_index)
                 if self.reconnect(self.addr):
                     print('Successfully reconnected!')
+                else:
+                    print('Failed reconnection')
                 sleep(self.delay)
 
 """

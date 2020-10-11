@@ -2,39 +2,30 @@
 #define ZERO_OFFSET 13500
 
 unsigned long previous_timeA = 0;
-unsigned long previous_timeB = 0;
 long count = 0;
 volatile bool handshake_flag = false;
 char buff[20];
 
-//Dummy values to send
-//Actual values range [-13500, 13499]
+/*Actual values range [-13500, 13499] 
+ * ## TO BE REPLACED HERE... [x,y,z,yaw,pitch,roll,c=checksum+id]
+*/
 int arr[6] = {0, 19, 20, -123, -13500, 13499};
 
-//compress + computeChecksum gives a 1-byte checksum
+//compress checksum to single byte
 int compress(int num) {
   if (num < 10) {
       return num;
   }
   return num%10 ^ compress(num/10);
 }
+
+//computeChecksum gives a 1-byte checksum
 int computeChecksum(char *s) {
   int output = 0;
   for (int i = 0; i < strlen(s); i++) {
     output ^= s[i];
   }
   return compress(output);
-}
-
-//__Deprecated function to print padded numbers__
-void padprint(char *s) {
-  int count = 3 - strlen(s);
-  while (count--) {
-    Serial.print('0');
-  }
-  for (int i = 0; i < strlen(s); i++) {
-    Serial.print(s[i]); 
-  }
 }
 
 //Function to offset raw values by ZERO_OFFSET
@@ -58,9 +49,7 @@ void setPad(char *b, char *s) {
 
 void setup() {
   Serial.begin(115200);  //initial the Serial
-  randomSeed(analogRead(0));
   previous_timeA = millis();
-  previous_timeB = millis();
 }
 
 //Task to check handshake with laptop
@@ -83,7 +72,9 @@ void sendArmData() {
     int i = 0;
     char temp[4];
     for (int j = 0; j < 6; j++) {
-      itoa(getOffset(arr[j]), temp, BASE_ITOA);
+      
+      itoa(getOffset(arr[j]), temp, BASE_ITOA); //TO BE REPLACED WITH ACTUAL ARRAY HERE
+      
       setPad(buff, temp); //copies temp onto buff with pads
     }
     int checksumDecimal = computeChecksum(buff);
@@ -95,30 +86,7 @@ void sendArmData() {
     delay(15);
     previous_timeA = millis();
     
-    //simulate changing values
-    arr[0] = (arr[0] + 1)%10;
-  }
-}
-
-//Task to send 2nd array of values (from body sensor) ~4-5Hz
-void sendBodyData() {
-    //Send body sensor
-  if (handshake_flag && (millis() - previous_timeB >= 81UL) ) {
-    int i = 1;
-    char temp[4];
-    for (int j = 0; j < 6; j++) {
-      itoa(getOffset(arr[j]), temp, BASE_ITOA);
-      setPad(buff, temp); //copies temp onto buff with pads
-    }
-    int checksumDecimal = computeChecksum(buff);
-    //checksum from 'A' to 'P' for i==1
-    buff[18] = checksumDecimal + 'A';
-    
-    Serial.print(buff);
-    memset(buff, 0, 20);
-    delay(13);
-    previous_timeB = millis();
-    //simulate changing values
+    //For dummy values --CAN REMOVE
     arr[0] = (arr[0] + 1)%10;
   }
 }
@@ -126,5 +94,4 @@ void sendBodyData() {
 void loop() {
   checkHandshake();
   sendArmData();
-//  sendBodyData();
 }
