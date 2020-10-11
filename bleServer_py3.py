@@ -1,14 +1,25 @@
-from bluepy.btle import Scanner, DefaultDelegate, Peripheral, BTLEDisconnectError
-from time import sleep, time
-from collections import deque
-from random import uniform
 import sys
 import threading
 import re
+import socket
+import random
+
+from Crypto import Random
+from Crypto.Cipher import AES
+from Crypto.Util.Padding import pad
+from base64 import b64encode
+from bluepy.btle import Scanner, DefaultDelegate, Peripheral, BTLEDisconnectError
+from time import sleep, time
+from collections import deque
+from random import uniform,randint
+
 
 #BLE stuff
-bt_addrs = {"34:15:13:22:a9:be":0, "2c:ab:33:cc:68:fa":1, "34:15:13:22:96:6f":2}
-bt_addrs_isConnected = {"34:15:13:22:a9:be":False, "2c:ab:33:cc:68:fa":False, "34:15:13:22:96:6f":False}
+# bt_addrs = {"34:15:13:22:a9:be":0, "2c:ab:33:cc:68:fa":1, "34:15:13:22:96:6f":2 } #, "c8:df:84:fe:3f:f4":3
+# bt_addrs_isConnected = {"34:15:13:22:a9:be":False, "2c:ab:33:cc:68:fa":False, "34:15:13:22:96:6f":False} #, "c8:df:84:fe:3f:f4":False
+
+bt_addrs = {"34:15:13:22:a9:be":0, "2c:ab:33:cc:68:fa":1, "34:15:13:22:96:6f":2, "c8:df:84:fe:3f:f4":3} #
+bt_addrs_isConnected = {"34:15:13:22:a9:be":False, "2c:ab:33:cc:68:fa":False, "34:15:13:22:96:6f":False, "c8:df:84:fe:3f:f4":False} #
 connections = {} #Stores peripherals of each beetle
 connection_threads = {} #Stores threads linked to peripherals --useless atm
 BLE_SERVICE_UUID = "0000dfb0-0000-1000-8000-00805f9b34fb"
@@ -18,15 +29,86 @@ endFlag = False
 PACKET_SIZE = 19
 PACKET_ZERO_OFFSET = 13500
 BUFFER_SKIP = 'xxx111xxx111xxx111x'
+delayWindow = []
+for i in range(4):
+    delayWindow.append(i*0.521)
 
 #Debugging
 printRawData = 0
 printError = 0
 printGoodData = 0
 printSummary = 1
+clientFlag = 0
+
+#Client
+ip_addr = 'localhost'
+port_num = 8080
+secret_key = 'thisisunhackable'
+client = None
+
+# dummy data for test purposes. not even a good one at that
+def construct_message(data=None):
+    # test data temporary format is '#[deviceID]|[x]|[y]|[z]|[y]|[p]|[r]|[timestamp]
+    msg = '#'
+    if data is not None:
+        for element in data:
+            msg += str(element) + '|'
+    else:
+        test_data = [random.choice(DEVICE), random.randint(1, 10000), random.randint(1, 10000), random.randint(1, 10000),
+                    random.randint(1, 10000), random.randint(1, 10000), random.randint(1, 10000), random.randint(1, 10000)]
+        for element in test_data:
+            msg = msg + str(element) + '|'
+    return msg[:-1]
+
+def convertAndSendData(dataString, deviceId):
+    pass
+    
+    ls = []
+    ls.append(int(deviceId))
+    ls += list(map(int, dataString.split('.')))
+    ls.append(random.randint(1, 10000))
+    msgList = construct_message(ls)
+    # print(ls)
+    client.send_data(msgList)
+
+
+'''
+    Client Class for sending to FPGA
+'''
+class Client():
+    def __init__(self, ip_address, port_num, secret_key):
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server_address = (ip_address, port_num)
+        self.sock.connect(server_address)
+        self.secret_key = str(secret_key).encode('utf8')
+        print(f"ULTRA96 client is connected to Ultra96 through: {ip_address}:{port_num}")
+
+    '''
+    msg str format is : '#[deviceID]|[x]|[y]|[z]|[y]|[p]|[r]|[timestamp]'
+    timestamp can be some int if not using
+    also encryption/decryption padding might not be compatible or smth sometimes
+    the last byte is decrypted as nonsense on server side
+    '''
+    def send_data(self, msg):
+        # test_string = "#" + position + "|" + action + "|" + delay + "|"
+        to_send = self.encrypt_message(msg)
+        print("to send:", to_send)
+        self.sock.sendall(to_send)
+
+    def stop(self):
+        self.sock.close()
+
+    def encrypt_message(self, msg):
+        message_bytes = str(msg).encode('utf8')
+        iv = Random.new().read(AES.block_size)
+        cipher = AES.new(self.secret_key, AES.MODE_CBC, iv)
+        encrypted = cipher.encrypt(pad(message_bytes, AES.block_size))
+        encoded = b64encode(iv + encrypted)
+        return encoded
+
 
 """
-    Whole class to handle buffering and reassembling packets here
+    Buffering and reassembling packets here
 """
 class BufferHandler():
     def __init__(self, number):
@@ -39,7 +121,7 @@ class BufferHandler():
     """
     # Data is in string format, 20bytes, base30, offset13500
     # Format: data[0] = deviceId, 
-    #         data[1:19] = xyz,pitch,roll,yaw (3bytes each), 
+    #         data[1:19] = xyz,yaw,pitch,roll (3bytes each), 
     #         data[19] = checksum -- ignore since we already validate beforehand
     # Returns output (str)
     """
@@ -183,7 +265,7 @@ class BufferHandler():
         return False
 
 """
-    Class to handle packets receive from beetle(s)
+    Handle packets received from beetle(s)
 """
 class NotificationDelegate(DefaultDelegate):
     def __init__(self, number):
@@ -195,51 +277,59 @@ class NotificationDelegate(DefaultDelegate):
 
     def handleNotification(self, cHandle, data):
         self.msgCount += 1
-        data = data.decode("utf-8")
-        #For debugging purposes [raw data]
-        if printRawData:
-            with open(f"laptopdata{self.number}.txt", "a") as text_file:
-                print(f"        D:{data} ({self.msgCount})", file=text_file)
-        flag = self.bH.checkValidity(data)
-        if self.bH.isCompleteBuffer(data, self.msgCount):
-            self.goodPacketCount += 1
-            deviceId = None
-            if self.bH.buffer:
-                data = self.bH.buffer
-                self.bH.buffer = None
-                flag = 'AS'
-            if flag and (self.msgCount > 1 or time() - self.baseTime > 5):
-                if data[PACKET_SIZE-1].islower():
-                    deviceId = 0
-                    self.goodPacketsArm += 1
-                else:
-                    deviceId = 1
-                    self.goodPacketsBody += 1
-            '''
-                # Prints individual report
-                # Device:number,flag,deviceID:data |total|goodPacketCount|goodPacketsArm|goodPacketsBody
-            '''
-            # Convert from base30 to decimal, accepts only PACKET_SIZE data (will ignore last checksum byte)
-            data = self.bH.convertToDecimal(data)
-            #For debugging purposes [good packets]
-            if printGoodData:
+        try:
+            data = data.decode("utf-8")
+            #For debugging purposes [raw data]
+            if printRawData:
                 with open(f"laptopdata{self.number}.txt", "a") as text_file:
-                    print(f"{self.number},{flag} [{deviceId}: {data}] ({self.goodPacketsArm}|{self.goodPacketsBody}|{self.goodPacketCount}|{self.msgCount})", file=text_file)
-        
-        #For debugging purposes (Prints every 5s) [Throughput]
-        if time() - self.pastTime >= 5:
-            tt = time() - self.baseTime
-            print(f"---{self.number}: {tt}s have passed ---")
-            if printSummary:
-                #Prints overall report
-                with open(f"laptopdata{self.number}.txt", "a") as text_file:
-                    print(f"{self.number} ({self.goodPacketsArm}|{self.goodPacketsBody}|{self.goodPacketCount}|{self.msgCount})", file=text_file)
-                    print(f"\n*** {tt}s have passed ***\n", file=text_file)
-            self.pastTime = time()
-            self.msgCount = self.goodPacketCount = self.goodPacketsArm = self.goodPacketsBody = 0
+                    print(f"        D:{data} ({self.msgCount})", file=text_file)
+            flag = self.bH.checkValidity(data)
+            if self.bH.isCompleteBuffer(data, self.msgCount):
+                self.goodPacketCount += 1
+                deviceId = None
+                if self.bH.buffer:
+                    data = self.bH.buffer
+                    self.bH.buffer = None
+                    flag = 'AS'
+                if flag and (self.msgCount > 1 or time() - self.baseTime > 5):
+                    if data[PACKET_SIZE-1].islower():
+                        deviceId = 0
+                        self.goodPacketsArm += 1
+                    else:
+                        deviceId = 1
+                        self.goodPacketsBody += 1
+                '''
+                    # Prints individual report
+                    # Device:number,flag,deviceID:data |total|goodPacketCount|goodPacketsArm|goodPacketsBody
+                '''
+                if self.msgCount > 1:
+                    # Convert from base30 to decimal, accepts only PACKET_SIZE data (will ignore last checksum byte)
+                    data = self.bH.convertToDecimal(data)
+                    if clientFlag:
+                        convertAndSendData(data, deviceId)
+                #For debugging purposes [good packets]
+                if printGoodData:
+                    with open(f"laptopdata{self.number}.txt", "a") as text_file:
+                        print(f"{self.number},{flag} [{deviceId}: {data}] ({self.goodPacketsArm}|{self.goodPacketsBody}|{self.goodPacketCount}|{self.msgCount})", file=text_file)
+            
+            #For debugging purposes (Prints every 5s) [Throughput]
+            if time() - self.pastTime >= 5:
+                tt = time() - self.baseTime
+                print(f"---{self.number}: {tt}s have passed ---")
+                print(f"{self.number} ({self.goodPacketsArm}|{self.goodPacketsBody}|{self.goodPacketCount}|{self.msgCount})")
+                if printSummary:
+                    #Prints overall report
+                    with open(f"laptopdata{self.number}.txt", "a") as text_file:
+                        print(f"{self.number} ({self.goodPacketsArm}|{self.goodPacketsBody}|{self.goodPacketCount}|{self.msgCount})", file=text_file)
+                        print(f"\n*** {tt}s have passed ***\n", file=text_file)
+                self.pastTime = time()
+                self.msgCount = self.goodPacketCount = self.goodPacketsArm = self.goodPacketsBody = 0
+        except:
+            #Error decoding using UTF-8
+            print('Decode error')
 
 """
-    Class to handle each connection with a beetle
+    Manage each connection with a beetle
 """
 class ConnectionHandlerThread (threading.Thread):
     def __init__(self, connection_index):
@@ -277,8 +367,9 @@ class ConnectionHandlerThread (threading.Thread):
                         self.isConnected = True
                         return True
             except:
-                print("Error when reconnecting..")
-            sleep(uniform(0.5, 0.9)) #Delay to avoid hoarding all the processing power
+                pass
+                # print(self.connection_index, "Error when reconnecting..")
+            sleep(delayWindow[randint(0, 3)]) #Delay to avoid hoarding all the processing power
             
     def run(self):
         #Setup respective delegates, service, characteristic...
@@ -290,7 +381,8 @@ class ConnectionHandlerThread (threading.Thread):
         
         #Delay before Handshake (to avoid any malformed packets somehow)
         print('Start', self.connection_index, self.c.uuid)
-        sleep(self.delay)
+        # sleep(self.delay)
+        sleep(delayWindow[randint(0, 3)])
         print('Done sleep')
         self.c.write(("H").encode())
         
@@ -345,6 +437,8 @@ def run():
 if __name__ == "__main__":
     try:
         run()
+        if clientFlag:
+            client = Client(ip_addr, port_num, secret_key)
         print('End of initial scan')
         
         while True: #IMPT WHILE LOOP FOR KEEPING THREADS ALIVE!!!

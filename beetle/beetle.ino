@@ -1,4 +1,3 @@
-#include <SoftwareSerial.h>
 #define BASE_ITOA 30
 #define ZERO_OFFSET 13500
 
@@ -72,6 +71,7 @@ void checkHandshake() {
       Serial.print(buff);
       handshake_flag = true;
       delay(50);
+      memset(buff, 0, 20);
     }
   }  
 }
@@ -92,7 +92,7 @@ void sendArmData() {
     
     Serial.print(buff);
     memset(buff, 0, 20);
-    delay(23);
+    delay(15);
     previous_timeA = millis();
     
     //simulate changing values
@@ -124,5 +124,5 @@ void sendBodyData() {
 void loop() {
   checkHandshake();
   sendArmData();
-  sendBodyData();
+//  sendBodyData();
 }
