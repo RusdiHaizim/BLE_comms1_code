@@ -26,4 +26,16 @@ Password: <Your SoC password>
 (For running main client code)
 Run: (On VMBOX)
 cd ~/shared/BLE_comms1_code/working
-sudo python3 ble_client.py
+sudo python3 client.py
+
+
+################################################################################################
+!!! Note for reconnection issues !!!
+If your wearable has issues with establishing a stable connection, you may need to edit some parameter in the btle.py package under bluepy.
+
+Run:
+cd /usr/local/lib/python3.8/dist-packages/bluepy
+sudo vim btle.py
+
+//Goto line 402, under _getResp(...) method under Peripheral class.
+//You need to change timeout from `None` to `3`
