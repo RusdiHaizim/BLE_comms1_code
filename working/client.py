@@ -38,7 +38,8 @@ GOOD_DATA_FLAG = 2
 bt_addrs = {"34:15:13:22:a9:be":0,
             "2c:ab:33:cc:68:fa":1, 
             "34:15:13:22:96:6f":2, 
-            "c8:df:84:fe:3f:f4":3}
+            "c8:df:84:fe:3f:f4":3,
+            "f8:30:02:08:e2:b5":4}
             
 #Sets all addresses to "not connected"
 bt_addrs_isConnected = {}
@@ -63,7 +64,7 @@ printGoodData = 0
 printSummary = 0
 
 #Set to 1 send to socket!
-clientFlag = 0
+clientFlag = 1
 
 #Set conversion from base30 to decimal
 decimalConvert = 1
@@ -300,6 +301,7 @@ class BufferHandler():
         self.buffer = None
         self.specialBuffer = None
         self.isAcknowledged = False
+        self.tolerance = 10
         self.hmap = {10:'a', 11:'b', 12:'c', 13:'d', 14:'e', 15:'f'} #--deprecated
     
     """
@@ -362,7 +364,7 @@ class BufferHandler():
         return False
     
     # Function to validate if packet needs buffering or isComplete
-    def isCompleteBuffer(self, data, msgCount):
+    def isCompleteBuffer(self, data, msgCount, goodPacketCount):
         def debugPrint(debugFlag, assembledString):
             #For debugging purposes [error packets]
             if printError:
@@ -396,140 +398,145 @@ class BufferHandler():
                 return buffer[:19]
                 buffer = buffer[19:] + data
             '''
-            if len(output) == 0:
-                print('NO BYTES RCVED!')
-                return False
-            if len(self.bufferQueue) == 0:
-                #Case 1: size=19
-                if len(output) == PACKET_SIZE:
-                    if self.checkValidity(output):
-                        self.bufferQueue = ''
-                        return GOOD_DATA_FLAG
-                elif len(output) < PACKET_SIZE: #Case 2: size<19
-                    assembledString = BUFFER_SKIP
-                    self.bufferQueue = output
-                    debugFlag = '<C2>'
-                    debugFlag += output
-                    debugFlag += '<C2>'
-                    debugPrint(debugFlag, assembledString)
-                else: #Case 3: size>19
-                    assembledString = output[:PACKET_SIZE]
-                    self.bufferQueue = output[PACKET_SIZE:]
-                    debugFlag = '<C3>'
-                    debugFlag += output
-                    debugFlag += '<C3>'
-                    debugPrint(debugFlag, assembledString)
-            else:
-                #Case 4: buffer, buffersize < 19
-                if len(self.bufferQueue) < PACKET_SIZE:
-                    diffInBytes = PACKET_SIZE - len(self.bufferQueue)
-                    assembledString = self.bufferQueue + output[:diffInBytes]
-                    self.bufferQueue = output[diffInBytes:]
-                    debugFlag = '<C4>'
-                    debugFlag += output
-                    debugFlag += '<C4>'
-                    debugPrint(debugFlag, assembledString)
-                #Case 5: buffer, buffersize=19
-                elif len(self.bufferQueue) == PACKET_SIZE:
-                    #Buffer is exactly 1 packet-size
-                    #So need to send 2 packets
-                    debugFlag = '<C5'
-                    assembledString = self.bufferQueue
-                    if len(output) == PACKET_SIZE and self.checkValidity(output):
-                        debugFlag += 'a>'
-                        self.specialBuffer = output
-                        self.bufferQueue = ''
-                    elif len(output) > PACKET_SIZE and self.checkValidity(output[:PACKET_SIZE]):
-                        debugFlag += 'b>'
-                        self.specialBuffer = output[:PACKET_SIZE]
-                        self.bufferQueue = output[PACKET_SIZE]
-                    else: #Smaller than 19 bytes
-                        debugFlag += 'c>'
-                        self.bufferQueue = output
-                    debugFlag += output
-                    debugFlag += '<C5>'
-                    debugPrint(debugFlag, assembledString)
-                #Case 6: buffer, buffersize>19
-                else:
-                    diffInBytes = len(self.bufferQueue) - PACKET_SIZE
-                    assembledString = self.bufferQueue[:PACKET_SIZE]
-                    self.bufferQueue = self.bufferQueue[PACKET_SIZE:] + output
-                    debugFlag = '<C6>'
-                    debugFlag += output
-                    debugFlag += '<C6>'
-                    debugPrint(debugFlag, assembledString)
-            # #Only execute when output is not empty
-            # if len(output) > 0:
-                # assembledString = ''
-                # debugFlag = ''
-                # if len(self.bufferQueue) == 0:
-                    # # CASE 0
-                    # # ONLY DONE AFTER HANDSHAKE
-                    # # SINCE HANDSHAKE MESSES UP SUBSEQUENT PACKETS...
-                    # if msgCount == 2:
-                        # if self.checkValidity(output[0][1:PACKET_SIZE+1]):
-                            # assembledString = output[0][1:PACKET_SIZE+1]
-                        # else: #Only last byte of handshake count matters for next packet
-                            # self.bufferQueue = output[0][-1]
-                            # return False
-                
-                    # debugFlag = '!'
-                    # # CASE A.1 (just right)
-                    # # If empty, expected that len(data) > PACKET_SIZE (data:20)
-                    # if len(output[0]) == PACKET_SIZE+1: #valid(19) + overflow(1)
-                        # self.bufferQueue += output[0][PACKET_SIZE]
-                        # assembledString = output[0][:PACKET_SIZE]
-                    # # CASE A.2 (shortage)
-                    # # If empty, expected that len(data) < PACKET_SIZE (data:<19)
-                    # else:
-                        # self.bufferQueue = output[0]
-                        # assembledString = BUFFER_SKIP
-                    # debugFlag += output[0]
-                    # debugFlag += '!'
-                # else:
-                    # # CASE B (perfect fit)
-                    # # expected that len(data) = PACKET_SIZE-1 (data:18)
-                    # # Match the single char from bufferQueue with new data
-                    # if len(output[0]) + len(self.bufferQueue) == PACKET_SIZE:
-                        # debugFlag = '@'
-                        # assembledString = self.bufferQueue + output[0]
-                        # self.bufferQueue = ''
-                        # debugFlag += output[0]
-                        # debugFlag += '@'
-                    # # CASE C (leftover)
-                    # # if handleNotification() called while processing this isCompleteBuffer()
-                    # # Clear previous buffer, perform rest same as CASE A
-                    # # Expected len(data) is 20
-                    # elif len(output[0]) + len(self.bufferQueue) > PACKET_SIZE:
-                        # if len(output[0]) + len(self.bufferQueue) > 2*PACKET_SIZE:
-                            # print('What.', 'EXCEEDED 40 BYTES!!!')
-                        # debugFlag = '#'
-                        
-                        # if self.checkValidity(output[0][:PACKET_SIZE]): #Special case right after handshake
-                            # self.bufferQueue = output[0][PACKET_SIZE]
-                            # assembledString = output[0][:PACKET_SIZE]
-                        # else: #Normal cases
-                            # bytesLeft = PACKET_SIZE - len(self.bufferQueue)
-                            # assembledString = self.bufferQueue + output[0][:bytesLeft]
-                            # self.bufferQueue = output[0][bytesLeft:]
-                        # debugFlag += output[0]
-                        # debugFlag += '#'
-                    # # CASE D (shortage)
-                    # # len(output[0]) + len(self.bufferQueue) < PACKET_SIZE
-                    # else: 
-                        # debugFlag = '$'
-                        # self.bufferQueue += output[0]
-                        # assembledString = BUFFER_SKIP
-                        # debugFlag += output[0]
-                        # debugFlag += '$'
-                
-                
-            #Returns true if current assembledString is valid
-            if self.checkValidity(assembledString):
-                self.buffer = assembledString
+            if msgCount > 10 and goodPacketCount / msgCount < 0.7:
+                self.tolerance -= 1
+            if self.tolerance <= 0 and self.checkValidity(data):
+                self.bufferQueue = ''
+                self.tolerance = 10
                 return GOOD_DATA_FLAG
-        else:
-            print('what')
+            else:
+                if len(output) == 0:
+                    print('NO BYTES RCVED!')
+                    return False
+                if len(self.bufferQueue) == 0:
+                    #Case 1: size=19
+                    if len(output) == PACKET_SIZE:
+                        if self.checkValidity(output):
+                            self.bufferQueue = ''
+                            return GOOD_DATA_FLAG
+                    elif len(output) < PACKET_SIZE: #Case 2: size<19
+                        assembledString = BUFFER_SKIP
+                        self.bufferQueue = output
+                        debugFlag = '<C2>'
+                        debugFlag += output
+                        debugFlag += '<C2>'
+                        debugPrint(debugFlag, assembledString)
+                    else: #Case 3: size>19
+                        assembledString = output[:PACKET_SIZE]
+                        self.bufferQueue = output[PACKET_SIZE:]
+                        debugFlag = '<C3>'
+                        debugFlag += output
+                        debugFlag += '<C3>'
+                        debugPrint(debugFlag, assembledString)
+                else:
+                    #Case 4: buffer, buffersize < 19
+                    if len(self.bufferQueue) < PACKET_SIZE:
+                        diffInBytes = PACKET_SIZE - len(self.bufferQueue)
+                        assembledString = self.bufferQueue + output[:diffInBytes]
+                        self.bufferQueue = output[diffInBytes:]
+                        debugFlag = '<C4>'
+                        debugFlag += output
+                        debugFlag += '<C4>'
+                        debugPrint(debugFlag, assembledString)
+                    #Case 5: buffer, buffersize=19
+                    elif len(self.bufferQueue) == PACKET_SIZE:
+                        #Buffer is exactly 1 packet-size
+                        #So need to send 2 packets
+                        debugFlag = '<C5'
+                        assembledString = self.bufferQueue
+                        if len(output) == PACKET_SIZE and self.checkValidity(output):
+                            debugFlag += 'a>'
+                            self.specialBuffer = output
+                            self.bufferQueue = ''
+                        elif len(output) > PACKET_SIZE and self.checkValidity(output[:PACKET_SIZE]):
+                            debugFlag += 'b>'
+                            self.specialBuffer = output[:PACKET_SIZE]
+                            self.bufferQueue = output[PACKET_SIZE]
+                        else: #Smaller than 19 bytes
+                            debugFlag += 'c>'
+                            self.bufferQueue = output
+                        debugFlag += output
+                        debugFlag += '<C5>'
+                        debugPrint(debugFlag, assembledString)
+                    #Case 6: buffer, buffersize>19
+                    else:
+                        diffInBytes = len(self.bufferQueue) - PACKET_SIZE
+                        assembledString = self.bufferQueue[:PACKET_SIZE]
+                        self.bufferQueue = self.bufferQueue[PACKET_SIZE:] + output
+                        debugFlag = '<C6>'
+                        debugFlag += output
+                        debugFlag += '<C6>'
+                        debugPrint(debugFlag, assembledString)
+                # #Only execute when output is not empty
+                # if len(output) > 0:
+                    # assembledString = ''
+                    # debugFlag = ''
+                    # if len(self.bufferQueue) == 0:
+                        # # CASE 0
+                        # # ONLY DONE AFTER HANDSHAKE
+                        # # SINCE HANDSHAKE MESSES UP SUBSEQUENT PACKETS...
+                        # if msgCount == 2:
+                            # if self.checkValidity(output[0][1:PACKET_SIZE+1]):
+                                # assembledString = output[0][1:PACKET_SIZE+1]
+                            # else: #Only last byte of handshake count matters for next packet
+                                # self.bufferQueue = output[0][-1]
+                                # return False
+                    
+                        # debugFlag = '!'
+                        # # CASE A.1 (just right)
+                        # # If empty, expected that len(data) > PACKET_SIZE (data:20)
+                        # if len(output[0]) == PACKET_SIZE+1: #valid(19) + overflow(1)
+                            # self.bufferQueue += output[0][PACKET_SIZE]
+                            # assembledString = output[0][:PACKET_SIZE]
+                        # # CASE A.2 (shortage)
+                        # # If empty, expected that len(data) < PACKET_SIZE (data:<19)
+                        # else:
+                            # self.bufferQueue = output[0]
+                            # assembledString = BUFFER_SKIP
+                        # debugFlag += output[0]
+                        # debugFlag += '!'
+                    # else:
+                        # # CASE B (perfect fit)
+                        # # expected that len(data) = PACKET_SIZE-1 (data:18)
+                        # # Match the single char from bufferQueue with new data
+                        # if len(output[0]) + len(self.bufferQueue) == PACKET_SIZE:
+                            # debugFlag = '@'
+                            # assembledString = self.bufferQueue + output[0]
+                            # self.bufferQueue = ''
+                            # debugFlag += output[0]
+                            # debugFlag += '@'
+                        # # CASE C (leftover)
+                        # # if handleNotification() called while processing this isCompleteBuffer()
+                        # # Clear previous buffer, perform rest same as CASE A
+                        # # Expected len(data) is 20
+                        # elif len(output[0]) + len(self.bufferQueue) > PACKET_SIZE:
+                            # if len(output[0]) + len(self.bufferQueue) > 2*PACKET_SIZE:
+                                # print('What.', 'EXCEEDED 40 BYTES!!!')
+                            # debugFlag = '#'
+                            
+                            # if self.checkValidity(output[0][:PACKET_SIZE]): #Special case right after handshake
+                                # self.bufferQueue = output[0][PACKET_SIZE]
+                                # assembledString = output[0][:PACKET_SIZE]
+                            # else: #Normal cases
+                                # bytesLeft = PACKET_SIZE - len(self.bufferQueue)
+                                # assembledString = self.bufferQueue + output[0][:bytesLeft]
+                                # self.bufferQueue = output[0][bytesLeft:]
+                            # debugFlag += output[0]
+                            # debugFlag += '#'
+                        # # CASE D (shortage)
+                        # # len(output[0]) + len(self.bufferQueue) < PACKET_SIZE
+                        # else: 
+                            # debugFlag = '$'
+                            # self.bufferQueue += output[0]
+                            # assembledString = BUFFER_SKIP
+                            # debugFlag += output[0]
+                            # debugFlag += '$'
+                    
+                    
+                #Returns true if current assembledString is valid
+                if self.checkValidity(assembledString):
+                    self.buffer = assembledString
+                    return GOOD_DATA_FLAG
         return False
 
 """
@@ -557,9 +564,9 @@ class NotificationDelegate(DefaultDelegate):
                 if printGoodData:
                     with open(f"laptopdata{self.number}.txt", "a") as text_file:
                         print(f"D:{data}, HANDSHAKE! ({self.msgCount})", file=text_file)
-                self.thread.c.write(("A").encode())
+                #self.thread.c.write(("A").encode())
                 return
-            if self.bH.isCompleteBuffer(data, self.msgCount):
+            if self.bH.isCompleteBuffer(data, self.msgCount, self.goodPacketCount):
                 self.goodPacketCount += 1
                 deviceId = None
                 if self.bH.buffer:
