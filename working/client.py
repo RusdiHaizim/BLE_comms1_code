@@ -12,7 +12,6 @@ import scipy.fftpack
 from scipy.fftpack import fft
 from scipy.signal import welch
 
-
 from Crypto import Random
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad
@@ -23,40 +22,6 @@ from time import sleep, time
 from collections import deque
 from random import uniform,randint
 
-BLE_SERVICE_UUID = "0000dfb0-0000-1000-8000-00805f9b34fb"
-BLE_CHARACTERISTIC_UUID = "0000dfb1-0000-1000-8000-00805f9b34fb"
-PACKET_SIZE = 19
-PACKET_ZERO_OFFSET = 13500
-BUFFER_SKIP = 'xxx111xxx111xxx111x'
-HANDSHAKE_FLAG = 1
-GOOD_DATA_FLAG = 2
-
-###
-
-#BEETLES' MAC ADDRESSES
-#Format: <MAC_IN_LOWERCASE>:<DEVICE_NUM>
-bt_addrs = {"34:15:13:22:a9:be":0,
-            "2c:ab:33:cc:68:fa":1, 
-            "34:15:13:22:96:6f":2, 
-            "c8:df:84:fe:3f:f4":3,
-            "f8:30:02:08:e2:b5":4}
-            
-#Sets all addresses to "not connected"
-bt_addrs_isConnected = {}
-for addr in bt_addrs:
-    bt_addrs_isConnected[addr] = False
-
-delayWindow = []
-for i in range(4):
-    delayWindow.append(i*0.621)
-
-connections = {} #Stores peripherals of each beetle
-connection_threads = {} #Stores threads linked to peripherals --useless atm
-endFlag = False
-scanner = Scanner(0)
-totalDevicesConnected = 0
-lock = threading.Lock()
-
 #Debugging
 printRawData = 0
 printError = 0
@@ -64,7 +29,8 @@ printGoodData = 0
 printSummary = 0
 
 #Set to 1 send to socket!
-clientFlag = 1
+clientFlag = 0
+preprocessFlag = 1
 
 #Set conversion from base30 to decimal
 decimalConvert = 1
@@ -75,6 +41,50 @@ port_num = 8081
 secret_key = 'thisisunhackable'
 client = None
 
+BLE_SERVICE_UUID = "0000dfb0-0000-1000-8000-00805f9b34fb"
+BLE_CHARACTERISTIC_UUID = "0000dfb1-0000-1000-8000-00805f9b34fb"
+PACKET_SIZE = 19
+PACKET_ZERO_OFFSET = 13500
+BUFFER_SKIP = 'xxx111xxx111xxx111x'
+HANDSHAKE_FLAG = 1
+GOOD_DATA_FLAG = 2
+WINDOW_SIZE = 100
+IDLE_STEP = "0,0,0,0,0,0"
+SPECIAL_SMALL_STEP = "1111,1111,1111,1111,1111,1111"
+SPECIAL_BIG_STEP = "2222,2222,2222,2222,2222,2222"
+
+###
+
+#BEETLES' MAC ADDRESSES
+#Format: <MAC_IN_LOWERCASE>:<DEVICE_NUM>
+bt_addrs = {"34:15:13:22:a9:be":0,
+            "2c:ab:33:cc:68:fa":1, 
+            "34:15:13:22:96:6f":2, 
+            "c8:df:84:fe:3f:f4":3,
+            "f8:30:02:08:e2:b5":4,
+            "f8:30:02:08:e5:e3":5,
+            "f8:30:02:09:14:a9":6,
+            "c8:df:84:fe:3f:f4":7,
+            "2c:ab:33:cc:6a:f6":8,
+            "2c:ab:33:cc:6c:ad":9}
+            
+#Sets all addresses to "not connected"
+bt_addrs_isConnected = {}
+for addr in bt_addrs:
+    bt_addrs_isConnected[addr] = False
+
+delayWindow = []
+for i in range(4):
+    delayWindow.append(i*0.621)
+
+#Bluepy code
+connections = {} #Stores peripherals of each beetle
+connection_threads = {} #Stores threads linked to peripherals --useless atm
+endFlag = False
+scanner = Scanner(0)
+totalDevicesConnected = 0
+lock = threading.Lock()
+
 #Preprocessor
 outputBuffer = []
 
@@ -82,7 +92,7 @@ outputBuffer = []
 
 # dummy data for test purposes. not even a good one at that
 def construct_message(data=None):
-    # test data temporary format is '#[deviceID]|[x]|[y]|[z]|[y]|[p]|[r]|[timestamp]
+    # test data temporary format is '#[deviceId]|[x]|[y]|[z]|[y]|[p]|[r]|[timestamp]
     msg = ''
     if data is not None:
         for element in data:
@@ -96,9 +106,16 @@ def construct_message(data=None):
 
 #Adding to outputBuffer
 def appendToOutputBuffer(data):
+    def checkNotAllZero(data):
+        ls = data.split(',')
+        for i in ls:
+            if float(i) != 0:
+                return True
+        return False
     global outputBuffer
-    data = '[' + data + ']'
-    outputBuffer.append(data)
+    if checkNotAllZero(data):
+        data = '[' + data + ']'
+        outputBuffer.append(data)
 
 #Sending data 1-by-1
 def convertAndSendData(dataString, deviceId):
@@ -117,6 +134,7 @@ class PreprocessorThread(threading.Thread):
     def __init__(self, initialTime):
         threading.Thread.__init__(self)
         self.startTime = initialTime
+        self.processCount = 0
     
     def run(self):
         global outputBuffer
@@ -127,7 +145,9 @@ class PreprocessorThread(threading.Thread):
         #Run continuously till end of script
         while True:
             #Check if outputBuffer size == 90, then start to send to 'client'
-            if len(outputBuffer) >= 90:
+            if len(outputBuffer) >= WINDOW_SIZE:
+                self.processCount += 1
+                print(f"\nWindow size of {WINDOW_SIZE} is fulfilled! COUNT: {self.processCount}. Preprocessing...\n")
                 self.runPreprocessor()
                 outputBuffer = []
         
@@ -180,7 +200,7 @@ class PreprocessorThread(threading.Thread):
 
         # start calculating frequency domain data
         t_n = 5   # duration
-        N = 90    # no. of samples
+        N = WINDOW_SIZE    # no. of samples
         T = t_n / N 
         f_s = 1/T
 
@@ -244,7 +264,8 @@ class PreprocessorThread(threading.Thread):
         with open(f"preprocessing.txt", "a") as text_file:
             print(f"{result}", file=text_file)
         
-        self.sendToFPGA(result)
+        if clientFlag:
+            self.sendToFPGA(result)
     
     def sendToFPGA(self, result):
         global client
@@ -301,7 +322,7 @@ class BufferHandler():
         self.buffer = None
         self.specialBuffer = None
         self.isAcknowledged = False
-        self.tolerance = 10
+        self.tolerance = 5
         self.hmap = {10:'a', 11:'b', 12:'c', 13:'d', 14:'e', 15:'f'} #--deprecated
     
     """
@@ -371,40 +392,39 @@ class BufferHandler():
                 with open(f"laptopdata{self.number}.txt", "a") as text_file:
                     print(f"    F,{debugFlag}: <{assembledString}> Q=[{self.bufferQueue}] ({msgCount})", file=text_file)
         
-        # #Accepts either 1) 'A'(for handshaking) or 2) Valid packets(checksum)
-        # if self.checkValidity(data):
-            # self.bufferQueue = ''
-            # return GOOD_DATA_FLAG
         #If check fails, do buffering since data is either: 1) incomplete or 2) overflows
         if self.isAcknowledged:
             #Filter out nonsense bytes
             output = list(filter(None, re.split(r'[\x00-\x20]', data)))
             output = output[0]
             '''
-            c1: buffer empty, size = 19, T
-            c2: buffer empty, size > 19,
-                if [:20] == T, then store [19] in buffer
-            c3: buffer empty, size < 19,
-                store in buffer, return
-            c4: buffer, buffersize < 19,
-                diff = 19 - len(buffer)
-                return buffer + data[:diff]
-                buffer = data[diff:]
-            c5: buffer, buffersize = 19,
-                return buffer[:19]
-                return data #buffer empty now
-                buffer = 
-            c6: buffer, buffersize > 19, #shouldnt reach here
-                return buffer[:19]
-                buffer = buffer[19:] + data
+            #    c1: buffer empty, size = 19, T
+            #    c2: buffer empty, size > 19,
+            #        if [:20] == T, then store [19] in buffer
+            #    c3: buffer empty, size < 19,
+            #        store in buffer, return
+            #    c4: buffer, buffersize < 19,
+            #       diff = 19 - len(buffer)
+            #        return buffer + data[:diff]
+            #        buffer = data[diff:]
+            #    c5: buffer, buffersize = 19,
+            #        return buffer[:19]
+            #        return data #buffer empty now
+            #        buffer = 
+            #    c6: buffer, buffersize > 19, #shouldnt reach here
+            #        return buffer[:19]
+            #        buffer = buffer[19:] + data
             '''
-            if msgCount > 10 and goodPacketCount / msgCount < 0.7:
+            if msgCount > 10 and goodPacketCount / msgCount < 0.75:
                 self.tolerance -= 1
             if self.tolerance <= 0 and self.checkValidity(data):
+                print('~Consecutive bad packets... Using tolerance reset!!!')
                 self.bufferQueue = ''
-                self.tolerance = 10
+                self.tolerance = 5
                 return GOOD_DATA_FLAG
             else:
+                self.tolerance = 5
+                assembledString = ''
                 if len(output) == 0:
                     print('NO BYTES RCVED!')
                     return False
@@ -467,71 +487,6 @@ class BufferHandler():
                         debugFlag += output
                         debugFlag += '<C6>'
                         debugPrint(debugFlag, assembledString)
-                # #Only execute when output is not empty
-                # if len(output) > 0:
-                    # assembledString = ''
-                    # debugFlag = ''
-                    # if len(self.bufferQueue) == 0:
-                        # # CASE 0
-                        # # ONLY DONE AFTER HANDSHAKE
-                        # # SINCE HANDSHAKE MESSES UP SUBSEQUENT PACKETS...
-                        # if msgCount == 2:
-                            # if self.checkValidity(output[0][1:PACKET_SIZE+1]):
-                                # assembledString = output[0][1:PACKET_SIZE+1]
-                            # else: #Only last byte of handshake count matters for next packet
-                                # self.bufferQueue = output[0][-1]
-                                # return False
-                    
-                        # debugFlag = '!'
-                        # # CASE A.1 (just right)
-                        # # If empty, expected that len(data) > PACKET_SIZE (data:20)
-                        # if len(output[0]) == PACKET_SIZE+1: #valid(19) + overflow(1)
-                            # self.bufferQueue += output[0][PACKET_SIZE]
-                            # assembledString = output[0][:PACKET_SIZE]
-                        # # CASE A.2 (shortage)
-                        # # If empty, expected that len(data) < PACKET_SIZE (data:<19)
-                        # else:
-                            # self.bufferQueue = output[0]
-                            # assembledString = BUFFER_SKIP
-                        # debugFlag += output[0]
-                        # debugFlag += '!'
-                    # else:
-                        # # CASE B (perfect fit)
-                        # # expected that len(data) = PACKET_SIZE-1 (data:18)
-                        # # Match the single char from bufferQueue with new data
-                        # if len(output[0]) + len(self.bufferQueue) == PACKET_SIZE:
-                            # debugFlag = '@'
-                            # assembledString = self.bufferQueue + output[0]
-                            # self.bufferQueue = ''
-                            # debugFlag += output[0]
-                            # debugFlag += '@'
-                        # # CASE C (leftover)
-                        # # if handleNotification() called while processing this isCompleteBuffer()
-                        # # Clear previous buffer, perform rest same as CASE A
-                        # # Expected len(data) is 20
-                        # elif len(output[0]) + len(self.bufferQueue) > PACKET_SIZE:
-                            # if len(output[0]) + len(self.bufferQueue) > 2*PACKET_SIZE:
-                                # print('What.', 'EXCEEDED 40 BYTES!!!')
-                            # debugFlag = '#'
-                            
-                            # if self.checkValidity(output[0][:PACKET_SIZE]): #Special case right after handshake
-                                # self.bufferQueue = output[0][PACKET_SIZE]
-                                # assembledString = output[0][:PACKET_SIZE]
-                            # else: #Normal cases
-                                # bytesLeft = PACKET_SIZE - len(self.bufferQueue)
-                                # assembledString = self.bufferQueue + output[0][:bytesLeft]
-                                # self.bufferQueue = output[0][bytesLeft:]
-                            # debugFlag += output[0]
-                            # debugFlag += '#'
-                        # # CASE D (shortage)
-                        # # len(output[0]) + len(self.bufferQueue) < PACKET_SIZE
-                        # else: 
-                            # debugFlag = '$'
-                            # self.bufferQueue += output[0]
-                            # assembledString = BUFFER_SKIP
-                            # debugFlag += output[0]
-                            # debugFlag += '$'
-                    
                     
                 #Returns true if current assembledString is valid
                 if self.checkValidity(assembledString):
@@ -550,7 +505,55 @@ class NotificationDelegate(DefaultDelegate):
         self.baseTime = self.pastTime = time()
         self.msgCount = self.goodPacketCount = self.goodPacketsArm = self.goodPacketsBody = 0
         self.bH = BufferHandler(number)
-
+        # self.runningSum = 0
+        # self.runningCount = 0
+        
+        #Position-related code
+        self.ignoreIdle = 1
+        self.startOfOne = 0
+        self.idleCount = 3
+        self.promptFlag = 1
+        self.deviceId = None
+    
+    def positionOrPreprocessCode(self, data):
+        #Body-beetle code
+        if self.deviceId == 1:
+            #Check for position. CHECK IF SMALL STEP OR BIG STEP
+            if data == IDLE_STEP:
+                self.ignoreIdle -= 1
+                # self.ignoreStep -= 1
+                if self.ignoreIdle == 0:
+                    # print(f"IDLE!") 
+                    self.ignoreIdle = 5
+                    self.idleCount += 1
+            #For debouncing of classifications (can only classify every 3 'IDLE's ~3s
+            if self.idleCount > 2:
+                if self.promptFlag:
+                    print('Move debouncing off. You may start moving if you so desire')
+                    self.promptFlag = 0
+                if not self.startOfOne:
+                    if data == SPECIAL_SMALL_STEP:
+                        self.startOfOne = 1
+                    elif data == SPECIAL_BIG_STEP:
+                        print("\nBIG move!\n")
+                        self.idleCount = 0
+                        self.promptFlag = 1
+                elif self.startOfOne:
+                    if data == IDLE_STEP:
+                        print("\nSmall move!\n")
+                        self.startOfOne = 0
+                        self.idleCount = 0
+                        self.promptFlag = 1
+                    elif data == SPECIAL_BIG_STEP:
+                        print("\nBIG move!\n")
+                        self.startOfOne = 0
+                        self.idleCount = 0
+                        self.promptFlag = 1
+        #Arm-beetle code
+        elif self.deviceId == 0:
+            #Adds to output buffer for preprocessing 
+            appendToOutputBuffer(data)
+    
     def handleNotification(self, cHandle, data):
         self.msgCount += 1
         try:
@@ -568,33 +571,52 @@ class NotificationDelegate(DefaultDelegate):
                 return
             if self.bH.isCompleteBuffer(data, self.msgCount, self.goodPacketCount):
                 self.goodPacketCount += 1
-                deviceId = None
+                # self.runningCount += 1
+                self.deviceId = None
                 if self.bH.buffer:
                     data = self.bH.buffer
                     self.bH.buffer = None
                     flag = 'AS'
                 if flag and (self.msgCount > 1 or time() - self.baseTime > 5):
                     if data[PACKET_SIZE-1].islower():
-                        deviceId = 0
+                        self.deviceId = 0
                         self.goodPacketsArm += 1
                     else:
-                        deviceId = 1
+                        self.deviceId = 1
                         self.goodPacketsBody += 1
                 '''
-                    # Prints individual report
-                    # Device:number,flag,deviceID:data |total|goodPacketCount|goodPacketsArm|goodPacketsBody
+                # Prints individual report
+                # Device:number,flag,deviceID:data |total|goodPacketCount|goodPacketsArm|goodPacketsBody
                 '''
                 
                 # Convert from base30 to decimal, accepts only PACKET_SIZE data (will ignore last checksum byte)
                 if decimalConvert:
                     data = self.bH.convertToDecimal(data)
-                if clientFlag:
-                    #convertAndSendData(data, deviceId)
-                    appendToOutputBuffer(data)
+                
+                #Run the position/preprocessing code based on deviceId
+                self.positionOrPreprocessCode(data)
+                
+                #Debug code for checking threshold of body sensor
+                # if self.deviceId == 1:
+                    # #Get x value to append to self.sumOfTen
+                    # tmpData = data.split(',')
+                    # tmpData = int(tmpData[0])
+                    # self.runningSum += tmpData
+                    
+                    # #Calculate x value sum of ten
+                    # if self.runningCount % 17 == 0:
+                        # if printGoodData:
+                            # print(f"\nSumOfTen:{self.runningSum}, ({self.runningCount})\n")
+                            # with open(f"laptopdata{self.number}.txt", "a") as text_file:
+                                # print(f"SumOfTen:{self.runningSum}, ({self.runningCount})", file=text_file)
+                        # self.runningSum = 0
+                        # self.runningCount = 0
+                
+                
                 #For debugging purposes [good packets]
                 if printGoodData:
                     with open(f"laptopdata{self.number}.txt", "a") as text_file:
-                        print(f"{self.number},{flag} [{deviceId}: {data}] ({self.goodPacketsArm}|{self.goodPacketsBody}|{self.goodPacketCount}|{self.msgCount})", file=text_file)
+                        print(f"{self.number},{flag} [{self.deviceId}: {data}] ({self.goodPacketsArm}|{self.goodPacketsBody}|{self.goodPacketCount}|{self.msgCount})", file=text_file)
                 
                 #Do it again if there is specialBuffer
                 if self.bH.specialBuffer:
@@ -603,21 +625,21 @@ class NotificationDelegate(DefaultDelegate):
                     self.bH.specialBuffer = None
                     if decimalConvert:
                         data = self.bH.convertToDecimal(data)
-                    if clientFlag:
-                        #convertAndSendData(data, deviceId)
-                        appendToOutputBuffer(data)
+                    
+                    #Run the position/preprocessing code based on deviceId
+                    self.positionOrPreprocessCode(data)
+                        
                     #For debugging purposes [good packets]
                     if printGoodData:
                         with open(f"laptopdata{self.number}.txt", "a") as text_file:
-                            print(f"{self.number},{flag} [{deviceId}: {data}] ({self.goodPacketsArm}|{self.goodPacketsBody}|{self.goodPacketCount}|{self.msgCount})", file=text_file)
-                    
+                            print(f"{self.number},{flag} [{self.deviceId}: {data}] ({self.goodPacketsArm}|{self.goodPacketsBody}|{self.goodPacketCount}|{self.msgCount})", file=text_file)
             
             #For debugging purposes (Prints every 5s) [Throughput]
             ### Send preprocessed data every 5s
             if time() - self.pastTime >= 5:
                 tt = time() - self.baseTime
                 print(f"---{self.number}: {tt}s have passed ---")
-                print(f"{self.number} ({self.goodPacketsArm}|{self.goodPacketsBody}|{self.goodPacketCount}|{self.msgCount})")
+                print(f"{self.number} ({self.goodPacketsArm}|{self.goodPacketsBody}|{self.goodPacketCount}|{self.msgCount}) | Buffer:{len(outputBuffer)}/{WINDOW_SIZE}")
                 if printSummary:
                     #Prints overall report
                     with open(f"laptopdata{self.number}.txt", "a") as text_file:
@@ -626,12 +648,9 @@ class NotificationDelegate(DefaultDelegate):
                 self.pastTime = time()
                 self.msgCount = self.goodPacketCount = self.goodPacketsArm = self.goodPacketsBody = 0
                 
-                #Send csv file
-                #if client
-                
         except:
             #Error decoding using UTF-8
-            print('Decode error')
+            print('Decode error', data)
 
 """
     Manage each connection with a beetle
@@ -723,7 +742,7 @@ class ConnectionHandlerThread (threading.Thread):
                     if self.connection.waitForNotifications(1): #Executed after every handleNotification(), within the given time
                         pass #But at the moment, just passively receives packets from beetle only
                     else:
-                        print(f"{self.connection_index} sending H again")
+                        print(f"No movement detected from device {self.connection_index}. Sending H again")
                         self.c.write(("H").encode())
                 except BTLEDisconnectError: #Handles sudden disconnection
                     if endFlag:
@@ -767,9 +786,10 @@ def run():
                 totalDevicesConnected += 1
             except: #Raised when unable to create connection
                 print('Error in connecting device')
-    ppT = PreprocessorThread(time())
-    ppT.daemon = True
-    ppT.start()
+    if preprocessFlag:
+        ppT = PreprocessorThread(time())
+        ppT.daemon = True
+        ppT.start()
 
 """
     Main function to manage daemon-threads and keep main thread(program) alive
